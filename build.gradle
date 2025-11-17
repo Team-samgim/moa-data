@@ -1,0 +1,58 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.2.0'
+    id 'io.spring.dependency-management' version '1.1.4'
+}
+
+group = 'com.moa'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    sourceCompatibility = '17'
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // ✨ WebSocket 지원 (추가)
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+
+    // Excel 읽기
+    implementation 'org.apache.poi:poi:5.2.5'
+    implementation 'org.apache.poi:poi-ooxml:5.2.5'
+    testImplementation 'org.projectlombok:lombok:1.18.28'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // Configuration Processor
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+
+    // swagger
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
+
+    // ✨ JSON 처리 (Spring Boot에 이미 포함되어 있지만 명시적으로 추가)
+    // implementation 'com.fasterxml.jackson.core:jackson-databind'
+    // implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    // → Spring Boot Starter Web에 이미 포함되어 있어서 주석 처리했습니다.
+    //    만약 버전 충돌이 있다면 주석을 해제하고 버전을 명시하세요.
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

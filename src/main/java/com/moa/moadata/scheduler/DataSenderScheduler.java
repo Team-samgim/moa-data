@@ -3,7 +3,7 @@ package com.moa.moadata.scheduler;
 import com.moa.moadata.client.MoaApiClient;
 import com.moa.moadata.model.HttpPageSample;
 import com.moa.moadata.reader.ExcelDataReader;
-import com.moa.moadata.websocket.WebSocketDataPublisher;
+import com.moa.moadata.sse.service.SseEmitterService;  // ⭐ 추가
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,13 +20,13 @@ public class DataSenderScheduler {
 
     private final ExcelDataReader excelDataReader;
     private final MoaApiClient moaApiClient;
-    private final WebSocketDataPublisher webSocketPublisher;
+    private final SseEmitterService sseEmitterService;  // ⭐ 추가!
 
     @Value("${moa.data.batch-size}")
     private int batchSize;
 
     // 스케줄러 활성화 플래그
-    private final AtomicBoolean enabled = new AtomicBoolean(false);  // 기본값: false (꺼짐)
+    private final AtomicBoolean enabled = new AtomicBoolean(false);
 
     @Scheduled(fixedRateString = "${moa.data.send-interval}")
     public void sendDataPeriodically() {
@@ -47,15 +47,18 @@ public class DataSenderScheduler {
             return;
         }
 
-        // 🔹 백엔드 API + 웹소켓 동시 전송
-        // MoaApiClient 내부에서 백엔드와 웹소켓 모두 처리
+        // 1️⃣ 백엔드 API로 배치 전송 (DB 저장용)
         moaApiClient.sendBatch(batch);
+
+        // 2️⃣ SSE로 프론트엔드에 실시간 전송 ⭐ 추가!
+        sseEmitterService.sendBatchData(batch);
 
         int current = excelDataReader.getCurrentIndex();
         int total = excelDataReader.getTotalSize();
         double progress = (double) current / total * 100;
 
-        log.info("📊 진행 상황: {}/{} ({:.1f}%)", current, total, progress);
+        log.info("📊 진행 상황: {}/{} ({:.1f}%) | SSE 클라이언트: {}개",
+                current, total, progress, sseEmitterService.getEmitterCount());
     }
 
     /**
@@ -63,9 +66,7 @@ public class DataSenderScheduler {
      */
     public void start() {
         enabled.set(true);
-        // 웹소켓으로 시작 상태 알림
-        webSocketPublisher.publishConnectionStatus("started", "🟢 실시간 데이터 전송 시작");
-        log.info("🟢 데이터 전송 시작! (백엔드 API + 웹소켓)");
+        log.info("🟢 데이터 전송 시작! (백엔드 API + SSE)");
     }
 
     /**
@@ -73,8 +74,6 @@ public class DataSenderScheduler {
      */
     public void stop() {
         enabled.set(false);
-        // 웹소켓으로 정지 상태 알림
-        webSocketPublisher.publishConnectionStatus("stopped", "🔴 실시간 데이터 전송 정지");
         log.info("🔴 데이터 전송 정지!");
     }
 
@@ -83,9 +82,7 @@ public class DataSenderScheduler {
      */
     public void restart() {
         enabled.set(false);
-        // 엑셀 리더 초기화 로직 필요하면 추가
         enabled.set(true);
-        webSocketPublisher.publishConnectionStatus("restarted", "🔄 실시간 데이터 전송 재시작");
         log.info("🔄 데이터 전송 재시작!");
     }
 

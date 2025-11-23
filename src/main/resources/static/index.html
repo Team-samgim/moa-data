@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>MOA Data</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #DEEBFA;
+            display: flex;
+            justify-content: center;
+        }
+
+        .logo-wrap {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        .logo {
+            width: 120px;
+            height: auto;
+            opacity: 0.9;
+        }
+
+        .app {
+            width: 100%;
+            height: 100%;
+            max-width: 480px;
+            min-height: 100vh;
+            background: white;
+            border-radius: 0;
+            padding: 40px;
+            box-sizing: border-box;
+        }
+
+        h2 {
+            font-size: 26px;
+            font-weight: 700;
+            color: #3877BE;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .section-title {
+            font-size: 17px;
+            font-weight: 600;
+            margin-top: 50px;
+            margin-bottom: 12px;
+            padding: 10px 14px;
+        }
+
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            margin-top: 8px;
+        }
+
+        button {
+            width: 100%;
+            padding: 18px 16px;
+            font-size: 17px;
+            font-weight: 600;
+            border: none;
+            border-radius: 16px;
+            cursor: pointer;
+            background: #3877BE;
+            color: white;
+            transition: 0.2s;
+        }
+
+        .btn-yellow { background: #F8F1D0; color: #AF982B; }
+        .btn-green { background: #E6F0C7; color: #809A35; }
+        .btn-lightblue { background: #DEEBFA; color: #3A74B6; }
+        .btn-blue { background: #3877BE; color: white; }
+
+        button:active {
+            transform: scale(0.97);
+        }
+
+        .log {
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            min-height: 70px;
+            white-space: pre-wrap;
+            color: #333;
+        }
+
+        .card-btn {
+            background: #ffffff;
+            border-radius: 18px;
+            padding: 22px 18px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: flex-start;
+            height: 120px;
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #333;
+        }
+
+        .card-sub {
+            font-size: 13px;
+            color: #444;
+            margin-bottom: 14px;
+        }
+
+        .card-btn button {
+            width: 100%;
+            border-radius: 10px;
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="logo-wrap">
+        <img src="/moa.webp" alt="MOA Logo" class="logo" />
+    </div>
+
+    <div class="section-title">실시간 데이터 전송</div>
+    <div class="btn-grid">
+        <div class="card-btn">
+            <button class="btn-lightblue" onclick="call('/scenario/start')">▶ 시작</button>
+        </div>
+
+        <div class="card-btn">
+            <button class="btn-yellow" onclick="call('/scenario/stop')">⏹ 중지</button>
+        </div>
+
+        <div class="card-btn" style="grid-column: span 2;">
+            <button class="btn-green" onclick="call('/scenario/status')">ℹ 상태 확인</button>
+        </div>
+    </div>
+
+    <div class="section-title">시나리오 실행</div>
+    <div class="btn-grid">
+        <div class="card-btn">
+            <div class="card-title">한국 느려짐</div>
+            <div class="card-sub">Simulate slow KR</div>
+            <button class="btn-green" onclick="call('/scenario/slow-country?country=KR&count=10')">🐢 실행</button>
+        </div>
+
+        <div class="card-btn">
+            <div class="card-title">에러 급증</div>
+            <div class="card-sub">5xx spike event</div>
+            <button class="btn-yellow" onclick="call('/scenario/error-spike?count=20')">💥 실행</button>
+        </div>
+
+        <div class="card-btn">
+            <div class="card-title">TCP 에러</div>
+            <div class="card-sub">Network issue</div>
+            <button class="btn-blue" onclick="call('/scenario/tcp-error?count=15')">🔌 실행</button>
+        </div>
+
+        <div class="card-btn">
+            <div class="card-title">Firefox 문제</div>
+            <div class="card-sub">UA-specific issue</div>
+            <button class="btn-green" onclick="call('/scenario/browser-issue?browser=Firefox&count=10')">🌐 실행</button>
+        </div>
+
+        <div class="card-btn" style="grid-column: span 2;">
+            <div class="card-title">정상 복구</div>
+            <div class="card-sub">Reset all events</div>
+            <button class="btn-blue" onclick="call('/scenario/recover?count=50')">🔄 복구</button>
+        </div>
+
+    </div>
+
+    <div class="section-title">로그</div>
+    <div class="card-btn" style="grid-column: span 2;">
+        <div class="log" id="log"></div>
+    </div>
+</div>
+
+<script>
+    function call(endpoint) {
+        fetch(endpoint, { method: 'POST' })
+            .then(res => res.text())
+            .then(txt => {
+                document.getElementById("log").innerText =
+                    `[${new Date().toLocaleTimeString()}]\n` + txt;
+            })
+            .catch(err => {
+                document.getElementById("log").innerText =
+                    `[ERROR]\n${err}`;
+            });
+    }
+</script>
+</body>
+</html>

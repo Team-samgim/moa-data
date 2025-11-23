@@ -11,6 +11,9 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -42,30 +45,71 @@ public class ExcelDataReader {
     private List<HttpPageSample> readExcelFile() throws IOException {
         List<HttpPageSample> samples = new ArrayList<>();
 
-        try (InputStream inputStream = excelFile.getInputStream();
-             Workbook workbook = new XSSFWorkbook(inputStream)) {
+        try (InputStream inputStream = excelFile.getInputStream()) {
+            String filename = excelFile.getFilename();
 
+            if (filename != null && filename.toLowerCase().endsWith(".csv")) {
+                // CSV 파일 로딩
+                readFromCsv(inputStream, samples);
+            } else {
+                // 기본: XLSX 엑셀 파일 로딩
+                readFromXlsx(inputStream, samples);
+            }
+        }
+
+        return samples;
+    }
+
+    private void readFromXlsx(InputStream inputStream, List<HttpPageSample> samples) throws IOException {
+        try (Workbook workbook = new XSSFWorkbook(inputStream)) {
             Sheet sheet = workbook.getSheetAt(0);
 
             // 1️⃣ 첫 번째 행에서 컬럼 인덱스 매핑 생성
             Row headerRow = sheet.getRow(0);
             this.headerIndexMap = buildHeaderIndexMap(headerRow);
 
-            log.info("📋 헤더 매핑 완료: {}", headerIndexMap.keySet());
+            log.info("📋 헤더 매핑 완료 (XLSX): {}", headerIndexMap.keySet());
 
             // 2️⃣ 두 번째 행부터 데이터 읽기
             for (int i = 1; i <= sheet.getLastRowNum(); i++) {
                 Row row = sheet.getRow(i);
                 if (row == null) continue;
 
-                HttpPageSample sample = parseRow(row);
+                RowAccessor accessor = new ExcelRowAccessor(row);
+                HttpPageSample sample = parseRow(accessor);
                 if (sample != null) {
                     samples.add(sample);
                 }
             }
         }
+    }
 
-        return samples;
+    private void readFromCsv(InputStream inputStream, List<HttpPageSample> samples) throws IOException {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+            String headerLine = reader.readLine();
+            if (headerLine == null) {
+                log.warn("CSV 파일이 비어있습니다");
+                return;
+            }
+
+            // 1️⃣ 헤더 라인에서 컬럼 인덱스 매핑 생성
+            String[] headers = headerLine.split(",", -1);
+            this.headerIndexMap = buildHeaderIndexMap(headers);
+            log.info("📋 헤더 매핑 완료 (CSV): {}", headerIndexMap.keySet());
+
+            // 2️⃣ 데이터 라인부터 읽기
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank()) continue;
+
+                String[] cols = line.split(",", -1);
+                RowAccessor accessor = new CsvRowAccessor(cols, headerIndexMap);
+                HttpPageSample sample = parseRow(accessor);
+                if (sample != null) {
+                    samples.add(sample);
+                }
+            }
+        }
     }
 
     // 헤더 이름 → 컬럼 인덱스 매핑
@@ -83,284 +127,298 @@ public class ExcelDataReader {
         return map;
     }
 
-    private HttpPageSample parseRow(Row row) {
+    // CSV용 헤더 배열 오버로드
+    private Map<String, Integer> buildHeaderIndexMap(String[] headers) {
+        Map<String, Integer> map = new HashMap<>();
+
+        for (int i = 0; i < headers.length; i++) {
+            String headerName = headers[i];
+            if (headerName != null) {
+                map.put(headerName.trim(), i);
+            }
+        }
+
+        return map;
+    }
+
+    private HttpPageSample parseRow(RowAccessor row) {
         try {
             return HttpPageSample.builder()
                     // ===== 기본 키 & IP/포트 =====
-                    .rowKey(getCellValueByHeader(row, "row_key"))
-                    .srcIp(getCellValueByHeader(row, "src_ip"))
-                    .dstIp(getCellValueByHeader(row, "dst_ip"))
-                    .srcPort(getCellValueAsIntegerByHeader(row, "src_port"))
-                    .dstPort(getCellValueAsIntegerByHeader(row, "dst_port"))
+                    .rowKey(row.getString("row_key"))
+                    .srcIp(row.getString("src_ip"))
+                    .dstIp(row.getString("dst_ip"))
+                    .srcPort(row.getInteger("src_port"))
+                    .dstPort(row.getInteger("dst_port"))
 
                     // ===== 프레임/페이지 타이밍 =====
-                    .tsFrameArrival(getCellValueAsDoubleByHeader(row, "ts_frame_arrival"))
-                    .tsFrameLandoff(getCellValueAsDoubleByHeader(row, "ts_frame_landoff"))
-                    .pageIdx(getCellValueAsLongByHeader(row, "page_idx"))
-                    .tsServerNsec(getCellValueAsDoubleByHeader(row, "ts_server_nsec"))
+                    .tsFrameArrival(row.getDouble("ts_frame_arrival"))
+                    .tsFrameLandoff(row.getDouble("ts_frame_landoff"))
+                    .pageIdx(row.getLong("page_idx"))
+                    .tsServerNsec(row.getDouble("ts_server_nsec"))
 
                     // ===== MAC =====
-                    .srcMac(getCellValueByHeader(row, "src_mac"))
-                    .dstMac(getCellValueByHeader(row, "dst_mac"))
+                    .srcMac(row.getString("src_mac"))
+                    .dstMac(row.getString("dst_mac"))
 
                     // ===== HTTP Length =====
-                    .pageHttpLen(getCellValueAsLongByHeader(row, "page_http_len"))
-                    .pageHttpLenReq(getCellValueAsLongByHeader(row, "page_http_len_req"))
-                    .pageHttpLenRes(getCellValueAsLongByHeader(row, "page_http_len_res"))
-                    .pageHttpHeaderLenReq(getCellValueAsLongByHeader(row, "page_http_header_len_req"))
-                    .pageHttpHeaderLenRes(getCellValueAsLongByHeader(row, "page_http_header_len_res"))
-                    .pageHttpContentLenReq(getCellValueAsLongByHeader(row, "page_http_content_len_req"))
-                    .pageHttpContentLenRes(getCellValueAsLongByHeader(row, "page_http_content_len_res"))
+                    .pageHttpLen(row.getLong("page_http_len"))
+                    .pageHttpLenReq(row.getLong("page_http_len_req"))
+                    .pageHttpLenRes(row.getLong("page_http_len_res"))
+                    .pageHttpHeaderLenReq(row.getLong("page_http_header_len_req"))
+                    .pageHttpHeaderLenRes(row.getLong("page_http_header_len_res"))
+                    .pageHttpContentLenReq(row.getLong("page_http_content_len_req"))
+                    .pageHttpContentLenRes(row.getLong("page_http_content_len_res"))
 
                     // ===== Packet Length =====
-                    .pagePktLen(getCellValueAsLongByHeader(row, "page_pkt_len"))
-                    .pagePktLenReq(getCellValueAsLongByHeader(row, "page_pkt_len_req"))
-                    .pagePktLenRes(getCellValueAsLongByHeader(row, "page_pkt_len_res"))
+                    .pagePktLen(row.getLong("page_pkt_len"))
+                    .pagePktLenReq(row.getLong("page_pkt_len_req"))
+                    .pagePktLenRes(row.getLong("page_pkt_len_res"))
 
                     // ===== TCP Length =====
-                    .pageTcpLen(getCellValueAsLongByHeader(row, "page_tcp_len"))
-                    .pageTcpLenReq(getCellValueAsLongByHeader(row, "page_tcp_len_req"))
-                    .pageTcpLenRes(getCellValueAsLongByHeader(row, "page_tcp_len_res"))
-                    .httpContentLength(getCellValueAsLongByHeader(row, "http_content_length"))
-                    .httpContentLengthReq(getCellValueAsLongByHeader(row, "http_content_length_req"))
+                    .pageTcpLen(row.getLong("page_tcp_len"))
+                    .pageTcpLenReq(row.getLong("page_tcp_len_req"))
+                    .pageTcpLenRes(row.getLong("page_tcp_len_res"))
+                    .httpContentLength(row.getLong("http_content_length"))
+                    .httpContentLengthReq(row.getLong("http_content_length_req"))
 
                     // ===== Conn / Error Length =====
-                    .connErrSessionLen(getCellValueAsLongByHeader(row, "conn_err_session_len"))
-                    .reqConnErrSessionLen(getCellValueAsLongByHeader(row, "req_conn_err_session_len"))
-                    .resConnErrSessionLen(getCellValueAsLongByHeader(row, "res_conn_err_session_len"))
-                    .retransmissionLen(getCellValueAsLongByHeader(row, "retransmission_len"))
-                    .retransmissionLenReq(getCellValueAsLongByHeader(row, "retransmission_len_req"))
-                    .retransmissionLenRes(getCellValueAsLongByHeader(row, "retransmission_len_res"))
-                    .outOfOrderLen(getCellValueAsLongByHeader(row, "out_of_order_len"))
-                    .outOfOrderLenReq(getCellValueAsLongByHeader(row, "out_of_order_len_req"))
-                    .outOfOrderLenRes(getCellValueAsLongByHeader(row, "out_of_order_len_res"))
-                    .lostSegLen(getCellValueAsLongByHeader(row, "lost_seg_len"))
-                    .lostSegLenReq(getCellValueAsLongByHeader(row, "lost_seg_len_req"))
-                    .lostSegLenRes(getCellValueAsLongByHeader(row, "lost_seg_len_res"))
-                    .ackLostLen(getCellValueAsLongByHeader(row, "ack_lost_len"))
-                    .ackLostLenReq(getCellValueAsLongByHeader(row, "ack_lost_len_req"))
-                    .ackLostLenRes(getCellValueAsLongByHeader(row, "ack_lost_len_res"))
-                    .winUpdateLen(getCellValueAsLongByHeader(row, "win_update_len"))
-                    .winUpdateLenReq(getCellValueAsLongByHeader(row, "win_update_len_req"))
-                    .winUpdateLenRes(getCellValueAsLongByHeader(row, "win_update_len_res"))
-                    .dupAckLen(getCellValueAsLongByHeader(row, "dup_ack_len"))
-                    .dupAckLenReq(getCellValueAsLongByHeader(row, "dup_ack_len_req"))
-                    .dupAckLenRes(getCellValueAsLongByHeader(row, "dup_ack_len_res"))
-                    .zeroWinLen(getCellValueAsLongByHeader(row, "zero_win_len"))
-                    .zeroWinLenReq(getCellValueAsLongByHeader(row, "zero_win_len_req"))
-                    .zeroWinLenRes(getCellValueAsLongByHeader(row, "zero_win_len_res"))
-                    .checksumErrorLen(getCellValueAsLongByHeader(row, "checksum_error_len"))
-                    .checksumErrorLenReq(getCellValueAsLongByHeader(row, "checksum_error_len_req"))
-                    .checksumErrorLenRes(getCellValueAsLongByHeader(row, "checksum_error_len_res"))
+                    .connErrSessionLen(row.getLong("conn_err_session_len"))
+                    .reqConnErrSessionLen(row.getLong("req_conn_err_session_len"))
+                    .resConnErrSessionLen(row.getLong("res_conn_err_session_len"))
+                    .retransmissionLen(row.getLong("retransmission_len"))
+                    .retransmissionLenReq(row.getLong("retransmission_len_req"))
+                    .retransmissionLenRes(row.getLong("retransmission_len_res"))
+                    .outOfOrderLen(row.getLong("out_of_order_len"))
+                    .outOfOrderLenReq(row.getLong("out_of_order_len_req"))
+                    .outOfOrderLenRes(row.getLong("out_of_order_len_res"))
+                    .lostSegLen(row.getLong("lost_seg_len"))
+                    .lostSegLenReq(row.getLong("lost_seg_len_req"))
+                    .lostSegLenRes(row.getLong("lost_seg_len_res"))
+                    .ackLostLen(row.getLong("ack_lost_len"))
+                    .ackLostLenReq(row.getLong("ack_lost_len_req"))
+                    .ackLostLenRes(row.getLong("ack_lost_len_res"))
+                    .winUpdateLen(row.getLong("win_update_len"))
+                    .winUpdateLenReq(row.getLong("win_update_len_req"))
+                    .winUpdateLenRes(row.getLong("win_update_len_res"))
+                    .dupAckLen(row.getLong("dup_ack_len"))
+                    .dupAckLenReq(row.getLong("dup_ack_len_req"))
+                    .dupAckLenRes(row.getLong("dup_ack_len_res"))
+                    .zeroWinLen(row.getLong("zero_win_len"))
+                    .zeroWinLenReq(row.getLong("zero_win_len_req"))
+                    .zeroWinLenRes(row.getLong("zero_win_len_res"))
+                    .checksumErrorLen(row.getLong("checksum_error_len"))
+                    .checksumErrorLenReq(row.getLong("checksum_error_len_req"))
+                    .checksumErrorLenRes(row.getLong("checksum_error_len_res"))
 
                     // ===== RTT / Count 계열 =====
-                    .pageRttConnCntReq(getCellValueAsIntegerByHeader(row, "page_rtt_conn_cnt_req"))
-                    .pageRttConnCntRes(getCellValueAsIntegerByHeader(row, "page_rtt_conn_cnt_res"))
-                    .pageRttAckCntReq(getCellValueAsIntegerByHeader(row, "page_rtt_ack_cnt_req"))
-                    .pageRttAckCntRes(getCellValueAsIntegerByHeader(row, "page_rtt_ack_cnt_res"))
-                    .pageReqMakingCnt(getCellValueAsIntegerByHeader(row, "page_req_making_cnt"))
-                    .pageHttpCnt(getCellValueAsIntegerByHeader(row, "page_http_cnt"))
-                    .pageHttpCntReq(getCellValueAsIntegerByHeader(row, "page_http_cnt_req"))
-                    .pageHttpCntRes(getCellValueAsIntegerByHeader(row, "page_http_cnt_res"))
-                    .pagePktCnt(getCellValueAsIntegerByHeader(row, "page_pkt_cnt"))
-                    .pagePktCntReq(getCellValueAsIntegerByHeader(row, "page_pkt_cnt_req"))
-                    .pagePktCntRes(getCellValueAsIntegerByHeader(row, "page_pkt_cnt_res"))
-                    .pageSessionCnt(getCellValueAsLongByHeader(row, "page_session_cnt"))
-                    .pageTcpConnectCnt(getCellValueAsIntegerByHeader(row, "page_tcp_connect_cnt"))
-                    .connErrPktCnt(getCellValueAsIntegerByHeader(row, "conn_err_pkt_cnt"))
-                    .connErrSessionCnt(getCellValueAsIntegerByHeader(row, "conn_err_session_cnt"))
-                    .retransmissionCnt(getCellValueAsIntegerByHeader(row, "retransmission_cnt"))
-                    .retransmissionCntReq(getCellValueAsIntegerByHeader(row, "retransmission_cnt_req"))
-                    .retransmissionCntRes(getCellValueAsIntegerByHeader(row, "retransmission_cnt_res"))
-                    .outOfOrderCnt(getCellValueAsIntegerByHeader(row, "out_of_order_cnt"))
-                    .outOfOrderCntReq(getCellValueAsIntegerByHeader(row, "out_of_order_cnt_req"))
-                    .outOfOrderCntRes(getCellValueAsIntegerByHeader(row, "out_of_order_cnt_res"))
-                    .lostSegCnt(getCellValueAsIntegerByHeader(row, "lost_seg_cnt"))
-                    .lostSegCntReq(getCellValueAsIntegerByHeader(row, "lost_seg_cnt_req"))
-                    .lostSegCntRes(getCellValueAsIntegerByHeader(row, "lost_seg_cnt_res"))
-                    .ackLostCnt(getCellValueAsIntegerByHeader(row, "ack_lost_cnt"))
-                    .ackLostCntReq(getCellValueAsIntegerByHeader(row, "ack_lost_cnt_req"))
-                    .ackLostCntRes(getCellValueAsIntegerByHeader(row, "ack_lost_cnt_res"))
-                    .winUpdateCnt(getCellValueAsIntegerByHeader(row, "win_update_cnt"))
-                    .winUpdateCntReq(getCellValueAsIntegerByHeader(row, "win_update_cnt_req"))
-                    .winUpdateCntRes(getCellValueAsIntegerByHeader(row, "win_update_cnt_res"))
-                    .dupAckCnt(getCellValueAsIntegerByHeader(row, "dup_ack_cnt"))
-                    .dupAckCntReq(getCellValueAsIntegerByHeader(row, "dup_ack_cnt_req"))
-                    .dupAckCntRes(getCellValueAsIntegerByHeader(row, "dup_ack_cnt_res"))
-                    .zeroWinCnt(getCellValueAsIntegerByHeader(row, "zero_win_cnt"))
-                    .zeroWinCntReq(getCellValueAsIntegerByHeader(row, "zero_win_cnt_req"))
-                    .zeroWinCntRes(getCellValueAsIntegerByHeader(row, "zero_win_cnt_res"))
-                    .windowFullCnt(getCellValueAsIntegerByHeader(row, "window_full_cnt"))
-                    .windowFullCntReq(getCellValueAsIntegerByHeader(row, "window_full_cnt_req"))
-                    .windowFullCntRes(getCellValueAsIntegerByHeader(row, "window_full_cnt_res"))
-                    .pageTcpCnt(getCellValueAsIntegerByHeader(row, "page_tcp_cnt"))
-                    .pageTcpCntReq(getCellValueAsIntegerByHeader(row, "page_tcp_cnt_req"))
-                    .pageTcpCntRes(getCellValueAsIntegerByHeader(row, "page_tcp_cnt_res"))
+                    .pageRttConnCntReq(row.getInteger("page_rtt_conn_cnt_req"))
+                    .pageRttConnCntRes(row.getInteger("page_rtt_conn_cnt_res"))
+                    .pageRttAckCntReq(row.getInteger("page_rtt_ack_cnt_req"))
+                    .pageRttAckCntRes(row.getInteger("page_rtt_ack_cnt_res"))
+                    .pageReqMakingCnt(row.getInteger("page_req_making_cnt"))
+                    .pageHttpCnt(row.getInteger("page_http_cnt"))
+                    .pageHttpCntReq(row.getInteger("page_http_cnt_req"))
+                    .pageHttpCntRes(row.getInteger("page_http_cnt_res"))
+                    .pagePktCnt(row.getInteger("page_pkt_cnt"))
+                    .pagePktCntReq(row.getInteger("page_pkt_cnt_req"))
+                    .pagePktCntRes(row.getInteger("page_pkt_cnt_res"))
+                    .pageSessionCnt(row.getLong("page_session_cnt"))
+                    .pageTcpConnectCnt(row.getInteger("page_tcp_connect_cnt"))
+                    .connErrPktCnt(row.getInteger("conn_err_pkt_cnt"))
+                    .connErrSessionCnt(row.getInteger("conn_err_session_cnt"))
+                    .retransmissionCnt(row.getInteger("retransmission_cnt"))
+                    .retransmissionCntReq(row.getInteger("retransmission_cnt_req"))
+                    .retransmissionCntRes(row.getInteger("retransmission_cnt_res"))
+                    .outOfOrderCnt(row.getInteger("out_of_order_cnt"))
+                    .outOfOrderCntReq(row.getInteger("out_of_order_cnt_req"))
+                    .outOfOrderCntRes(row.getInteger("out_of_order_cnt_res"))
+                    .lostSegCnt(row.getInteger("lost_seg_cnt"))
+                    .lostSegCntReq(row.getInteger("lost_seg_cnt_req"))
+                    .lostSegCntRes(row.getInteger("lost_seg_cnt_res"))
+                    .ackLostCnt(row.getInteger("ack_lost_cnt"))
+                    .ackLostCntReq(row.getInteger("ack_lost_cnt_req"))
+                    .ackLostCntRes(row.getInteger("ack_lost_cnt_res"))
+                    .winUpdateCnt(row.getInteger("win_update_cnt"))
+                    .winUpdateCntReq(row.getInteger("win_update_cnt_req"))
+                    .winUpdateCntRes(row.getInteger("winUpdateCntRes"))
+                    .dupAckCnt(row.getInteger("dup_ack_cnt"))
+                    .dupAckCntReq(row.getInteger("dup_ack_cnt_req"))
+                    .dupAckCntRes(row.getInteger("dup_ack_cnt_res"))
+                    .zeroWinCnt(row.getInteger("zero_win_cnt"))
+                    .zeroWinCntReq(row.getInteger("zero_win_cnt_req"))
+                    .zeroWinCntRes(row.getInteger("zero_win_cnt_res"))
+                    .windowFullCnt(row.getInteger("window_full_cnt"))
+                    .windowFullCntReq(row.getInteger("window_full_cnt_req"))
+                    .windowFullCntRes(row.getInteger("window_full_cnt_res"))
+                    .pageTcpCnt(row.getInteger("page_tcp_cnt"))
+                    .pageTcpCntReq(row.getInteger("page_tcp_cnt_req"))
+                    .pageTcpCntRes(row.getInteger("page_tcp_cnt_res"))
 
                     // ===== HTTP Method Count =====
-                    .reqMethodGetCnt(getCellValueAsIntegerByHeader(row, "req_method_get_cnt"))
-                    .reqMethodPutCnt(getCellValueAsIntegerByHeader(row, "req_method_put_cnt"))
-                    .reqMethodHeadCnt(getCellValueAsIntegerByHeader(row, "req_method_head_cnt"))
-                    .reqMethodPostCnt(getCellValueAsIntegerByHeader(row, "req_method_post_cnt"))
-                    .reqMethodTraceCnt(getCellValueAsIntegerByHeader(row, "req_method_trace_cnt"))
-                    .reqMethodDeleteCnt(getCellValueAsIntegerByHeader(row, "req_method_delete_cnt"))
-                    .reqMethodOptionsCnt(getCellValueAsIntegerByHeader(row, "req_method_options_cnt"))
-                    .reqMethodPatchCnt(getCellValueAsIntegerByHeader(row, "req_method_patch_cnt"))
-                    .reqMethodConnectCnt(getCellValueAsIntegerByHeader(row, "req_method_connect_cnt"))
-                    .reqMethodOthCnt(getCellValueAsIntegerByHeader(row, "req_method_oth_cnt"))
-                    .reqMethodGetCntError(getCellValueAsIntegerByHeader(row, "req_method_get_cnt_error"))
-                    .reqMethodPutCntError(getCellValueAsIntegerByHeader(row, "req_method_put_cnt_error"))
-                    .reqMethodHeadCntError(getCellValueAsIntegerByHeader(row, "req_method_head_cnt_error"))
-                    .reqMethodPostCntError(getCellValueAsIntegerByHeader(row, "req_method_post_cnt_error"))
-                    .reqMethodTraceCntError(getCellValueAsIntegerByHeader(row, "req_method_trace_cnt_error"))
-                    .reqMethodDeleteCntError(getCellValueAsIntegerByHeader(row, "req_method_delete_cnt_error"))
-                    .reqMethodOptionsCntError(getCellValueAsIntegerByHeader(row, "req_method_options_cnt_error"))
-                    .reqMethodPatchCntError(getCellValueAsIntegerByHeader(row, "req_method_patch_cnt_error"))
-                    .reqMethodConnectCntError(getCellValueAsIntegerByHeader(row, "req_method_connect_cnt_error"))
-                    .reqMethodOthCntError(getCellValueAsIntegerByHeader(row, "req_method_oth_cnt_error"))
+                    .reqMethodGetCnt(row.getInteger("req_method_get_cnt"))
+                    .reqMethodPutCnt(row.getInteger("req_method_put_cnt"))
+                    .reqMethodHeadCnt(row.getInteger("req_method_head_cnt"))
+                    .reqMethodPostCnt(row.getInteger("req_method_post_cnt"))
+                    .reqMethodTraceCnt(row.getInteger("req_method_trace_cnt"))
+                    .reqMethodDeleteCnt(row.getInteger("req_method_delete_cnt"))
+                    .reqMethodOptionsCnt(row.getInteger("req_method_options_cnt"))
+                    .reqMethodPatchCnt(row.getInteger("req_method_patch_cnt"))
+                    .reqMethodConnectCnt(row.getInteger("req_method_connect_cnt"))
+                    .reqMethodOthCnt(row.getInteger("req_method_oth_cnt"))
+                    .reqMethodGetCntError(row.getInteger("req_method_get_cnt_error"))
+                    .reqMethodPutCntError(row.getInteger("req_method_put_cnt_error"))
+                    .reqMethodHeadCntError(row.getInteger("req_method_head_cnt_error"))
+                    .reqMethodPostCntError(row.getInteger("req_method_post_cnt_error"))
+                    .reqMethodTraceCntError(row.getInteger("req_method_trace_cnt_error"))
+                    .reqMethodDeleteCntError(row.getInteger("req_method_delete_cnt_error"))
+                    .reqMethodOptionsCntError(row.getInteger("req_method_options_cnt_error"))
+                    .reqMethodPatchCntError(row.getInteger("req_method_patch_cnt_error"))
+                    .reqMethodConnectCntError(row.getInteger("req_method_connect_cnt_error"))
+                    .reqMethodOthCntError(row.getInteger("req_method_oth_cnt_error"))
 
                     // ===== Response Code Count =====
-                    .resCode1xxCnt(getCellValueAsIntegerByHeader(row, "res_code_1xx_cnt"))
-                    .resCode2xxCnt(getCellValueAsIntegerByHeader(row, "res_code_2xx_cnt"))
-                    .resCode304Cnt(getCellValueAsIntegerByHeader(row, "res_code_304_cnt"))
-                    .resCode3xxCnt(getCellValueAsIntegerByHeader(row, "res_code_3xx_cnt"))
-                    .resCode401Cnt(getCellValueAsIntegerByHeader(row, "res_code_401_cnt"))
-                    .resCode403Cnt(getCellValueAsIntegerByHeader(row, "res_code_403_cnt"))
-                    .resCode404Cnt(getCellValueAsIntegerByHeader(row, "res_code_404_cnt"))
-                    .resCode4xxCnt(getCellValueAsIntegerByHeader(row, "res_code_4xx_cnt"))
-                    .resCode5xxCnt(getCellValueAsIntegerByHeader(row, "res_code_5xx_cnt"))
-                    .resCodeOthCnt(getCellValueAsIntegerByHeader(row, "res_code_oth_cnt"))
+                    .resCode1xxCnt(row.getInteger("res_code_1xx_cnt"))
+                    .resCode2xxCnt(row.getInteger("res_code_2xx_cnt"))
+                    .resCode304Cnt(row.getInteger("res_code_304_cnt"))
+                    .resCode3xxCnt(row.getInteger("res_code_3xx_cnt"))
+                    .resCode401Cnt(row.getInteger("res_code_401_cnt"))
+                    .resCode403Cnt(row.getInteger("res_code_403_cnt"))
+                    .resCode404Cnt(row.getInteger("res_code_404_cnt"))
+                    .resCode4xxCnt(row.getInteger("res_code_4xx_cnt"))
+                    .resCode5xxCnt(row.getInteger("res_code_5xx_cnt"))
+                    .resCodeOthCnt(row.getInteger("res_code_oth_cnt"))
 
                     // ===== Transaction / Timeout etc =====
-                    .stoppedTransactionCnt(getCellValueAsIntegerByHeader(row, "stopped_transaction_cnt"))
-                    .stoppedTransactionCntReq(getCellValueAsIntegerByHeader(row, "stopped_transaction_cnt_req"))
-                    .stoppedTransactionCntRes(getCellValueAsIntegerByHeader(row, "stopped_transaction_cnt_res"))
-                    .incompleteCnt(getCellValueAsIntegerByHeader(row, "incomplete_cnt"))
-                    .incompleteCntReq(getCellValueAsIntegerByHeader(row, "incomplete_cnt_req"))
-                    .incompleteCntRes(getCellValueAsIntegerByHeader(row, "incomplete_cnt_res"))
-                    .timeoutCnt(getCellValueAsIntegerByHeader(row, "timeout_cnt"))
-                    .timeoutCntReq(getCellValueAsIntegerByHeader(row, "timeout_cnt_req"))
-                    .timeoutCntRes(getCellValueAsIntegerByHeader(row, "timeout_cnt_res"))
-                    .tsPageRtoCntReq(getCellValueAsIntegerByHeader(row, "ts_page_rto_cnt_req"))
-                    .tsPageRtoCntRes(getCellValueAsIntegerByHeader(row, "ts_page_rto_cnt_res"))
-                    .tcpErrorCnt(getCellValueAsIntegerByHeader(row, "tcp_error_cnt"))
-                    .tcpErrorCntReq(getCellValueAsIntegerByHeader(row, "tcp_error_cnt_req"))
-                    .tcpErrorCntRes(getCellValueAsIntegerByHeader(row, "tcp_error_cnt_res"))
-                    .tcpErrorLen(getCellValueAsLongByHeader(row, "tcp_error_len"))
-                    .tcpErrorLenReq(getCellValueAsLongByHeader(row, "tcp_error_len_req"))
-                    .tcpErrorLenRes(getCellValueAsLongByHeader(row, "tcp_error_len_res"))
-                    .pageErrorCnt(getCellValueAsIntegerByHeader(row, "page_error_cnt"))
-                    .uriCnt(getCellValueAsIntegerByHeader(row, "uri_cnt"))
-                    .httpUriCnt(getCellValueAsIntegerByHeader(row, "http_uri_cnt"))
-                    .httpsUriCnt(getCellValueAsIntegerByHeader(row, "https_uri_cnt"))
+                    .stoppedTransactionCnt(row.getInteger("stopped_transaction_cnt"))
+                    .stoppedTransactionCntReq(row.getInteger("stopped_transaction_cnt_req"))
+                    .stoppedTransactionCntRes(row.getInteger("stopped_transaction_cnt_res"))
+                    .incompleteCnt(row.getInteger("incomplete_cnt"))
+                    .incompleteCntReq(row.getInteger("incomplete_cnt_req"))
+                    .incompleteCntRes(row.getInteger("incomplete_cnt_res"))
+                    .timeoutCnt(row.getInteger("timeout_cnt"))
+                    .timeoutCntReq(row.getInteger("timeout_cnt_req"))
+                    .timeoutCntRes(row.getInteger("timeout_cnt_res"))
+                    .tsPageRtoCntReq(row.getInteger("ts_page_rto_cnt_req"))
+                    .tsPageRtoCntRes(row.getInteger("ts_page_rto_cnt_res"))
+                    .tcpErrorCnt(row.getInteger("tcp_error_cnt"))
+                    .tcpErrorCntReq(row.getInteger("tcp_error_cnt_req"))
+                    .tcpErrorCntRes(row.getInteger("tcp_error_cnt_res"))
+                    .tcpErrorLen(row.getLong("tcp_error_len"))
+                    .tcpErrorLenReq(row.getLong("tcp_error_len_req"))
+                    .tcpErrorLenRes(row.getLong("tcp_error_len_res"))
+                    .pageErrorCnt(row.getInteger("page_error_cnt"))
+                    .uriCnt(row.getInteger("uri_cnt"))
+                    .httpUriCnt(row.getInteger("http_uri_cnt"))
+                    .httpsUriCnt(row.getInteger("https_uri_cnt"))
 
                     // ===== Content-Type Count =====
-                    .contentTypeHtmlCntReq(getCellValueAsIntegerByHeader(row, "content_type_html_cnt_req"))
-                    .contentTypeHtmlCntRes(getCellValueAsIntegerByHeader(row, "content_type_html_cnt_res"))
-                    .contentTypeCssCntReq(getCellValueAsIntegerByHeader(row, "content_type_css_cnt_req"))
-                    .contentTypeCssCntRes(getCellValueAsIntegerByHeader(row, "content_type_css_cnt_res"))
-                    .contentTypeJsCntReq(getCellValueAsIntegerByHeader(row, "content_type_js_cnt_req"))
-                    .contentTypeJsCntRes(getCellValueAsIntegerByHeader(row, "content_type_js_cnt_res"))
-                    .contentTypeImgCntReq(getCellValueAsIntegerByHeader(row, "content_type_img_cnt_req"))
-                    .contentTypeImgCntRes(getCellValueAsIntegerByHeader(row, "content_type_img_cnt_res"))
-                    .contentTypeOthCntReq(getCellValueAsIntegerByHeader(row, "content_type_oth_cnt_req"))
-                    .contentTypeOthCntRes(getCellValueAsIntegerByHeader(row, "content_type_oth_cnt_res"))
+                    .contentTypeHtmlCntReq(row.getInteger("content_type_html_cnt_req"))
+                    .contentTypeHtmlCntRes(row.getInteger("content_type_html_cnt_res"))
+                    .contentTypeCssCntReq(row.getInteger("content_type_css_cnt_req"))
+                    .contentTypeCssCntRes(row.getInteger("content_type_css_cnt_res"))
+                    .contentTypeJsCntReq(row.getInteger("content_type_js_cnt_req"))
+                    .contentTypeJsCntRes(row.getInteger("content_type_js_cnt_res"))
+                    .contentTypeImgCntReq(row.getInteger("content_type_img_cnt_req"))
+                    .contentTypeImgCntRes(row.getInteger("content_type_img_cnt_res"))
+                    .contentTypeOthCntReq(row.getInteger("content_type_oth_cnt_req"))
+                    .contentTypeOthCntRes(row.getInteger("content_type_oth_cnt_res"))
 
                     // ===== HTTP/HTTPS / 코드 =====
-                    .httpResCode(getCellValueByHeader(row, "http_res_code"))
-                    .isHttps(getCellValueAsIntegerByHeader(row, "is_https"))
+                    .httpResCode(row.getString("http_res_code"))
+                    .isHttps(row.getInteger("is_https"))
 
                     // ===== 세부 타이밍 (ts_*) =====
-                    .tsFirst(getCellValueAsDoubleByHeader(row, "ts_first"))
-                    .tsPageBegin(getCellValueAsDoubleByHeader(row, "ts_page_begin"))
-                    .tsPageEnd(getCellValueAsDoubleByHeader(row, "ts_page_end"))
-                    .tsPageReqSyn(getCellValueAsDoubleByHeader(row, "ts_page_req_syn"))
-                    .tsPage(getCellValueAsDoubleByHeader(row, "ts_page"))
-                    .tsPageGap(getCellValueAsDoubleByHeader(row, "ts_page_gap"))
-                    .tsPageResInit(getCellValueAsDoubleByHeader(row, "ts_page_res_init"))
-                    .tsPageResInitGap(getCellValueAsDoubleByHeader(row, "ts_page_res_init_gap"))
-                    .tsPageResApp(getCellValueAsDoubleByHeader(row, "ts_page_res_app"))
-                    .tsPageResAppGap(getCellValueAsDoubleByHeader(row, "ts_page_res_app_gap"))
-                    .tsPageRes(getCellValueAsDoubleByHeader(row, "ts_page_res"))
-                    .tsPageResGap(getCellValueAsDoubleByHeader(row, "ts_page_res_gap"))
-                    .tsPageTransferReq(getCellValueAsDoubleByHeader(row, "ts_page_transfer_req"))
-                    .tsPageTransferReqGap(getCellValueAsDoubleByHeader(row, "ts_page_transfer_req_gap"))
-                    .tsPageTransferRes(getCellValueAsDoubleByHeader(row, "ts_page_transfer_res"))
-                    .tsPageTransferResGap(getCellValueAsDoubleByHeader(row, "ts_page_transfer_res_gap"))
-                    .tsPageReqMakingSum(getCellValueAsDoubleByHeader(row, "ts_page_req_making_sum"))
-                    .tsPageReqMakingAvg(getCellValueAsDoubleByHeader(row, "ts_page_req_making_avg"))
-                    .tsPageTcpConnectSum(getCellValueAsDoubleByHeader(row, "ts_page_tcp_connect_sum"))
-                    .tsPageTcpConnectMin(getCellValueAsDoubleByHeader(row, "ts_page_tcp_connect_min"))
-                    .tsPageTcpConnectMax(getCellValueAsDoubleByHeader(row, "ts_page_tcp_connect_max"))
-                    .tsPageTcpConnectAvg(getCellValueAsDoubleByHeader(row, "ts_page_tcp_connect_avg"))
+                    .tsFirst(row.getDouble("ts_first"))
+                    .tsPageBegin(row.getDouble("ts_page_begin"))
+                    .tsPageEnd(row.getDouble("ts_page_end"))
+                    .tsPageReqSyn(row.getDouble("ts_page_req_syn"))
+                    .tsPage(row.getDouble("ts_page"))
+                    .tsPageGap(row.getDouble("ts_page_gap"))
+                    .tsPageResInit(row.getDouble("ts_page_res_init"))
+                    .tsPageResInitGap(row.getDouble("ts_page_res_init_gap"))
+                    .tsPageResApp(row.getDouble("ts_page_res_app"))
+                    .tsPageResAppGap(row.getDouble("ts_page_res_app_gap"))
+                    .tsPageRes(row.getDouble("ts_page_res"))
+                    .tsPageResGap(row.getDouble("ts_page_res_gap"))
+                    .tsPageTransferReq(row.getDouble("ts_page_transfer_req"))
+                    .tsPageTransferReqGap(row.getDouble("ts_page_transfer_req_gap"))
+                    .tsPageTransferRes(row.getDouble("ts_page_transfer_res"))
+                    .tsPageTransferResGap(row.getDouble("ts_page_transfer_res_gap"))
+                    .tsPageReqMakingSum(row.getDouble("ts_page_req_making_sum"))
+                    .tsPageReqMakingAvg(row.getDouble("ts_page_req_making_avg"))
+                    .tsPageTcpConnectSum(row.getDouble("ts_page_tcp_connect_sum"))
+                    .tsPageTcpConnectMin(row.getDouble("ts_page_tcp_connect_min"))
+                    .tsPageTcpConnectMax(row.getDouble("ts_page_tcp_connect_max"))
+                    .tsPageTcpConnectAvg(row.getDouble("ts_page_tcp_connect_avg"))
 
                     // ===== Mbps / Pps =====
-                    .mbps(getCellValueAsDoubleByHeader(row, "mbps"))
-                    .mbpsReq(getCellValueAsDoubleByHeader(row, "mbps_req"))
-                    .mbpsRes(getCellValueAsDoubleByHeader(row, "mbps_res"))
-                    .pps(getCellValueAsDoubleByHeader(row, "pps"))
-                    .ppsReq(getCellValueAsDoubleByHeader(row, "pps_req"))
-                    .ppsRes(getCellValueAsDoubleByHeader(row, "pps_res"))
-                    .mbpsMin(getCellValueAsDoubleByHeader(row, "mbps_min"))
-                    .mbpsMinReq(getCellValueAsDoubleByHeader(row, "mbps_min_req"))
-                    .mbpsMinRes(getCellValueAsDoubleByHeader(row, "mbps_min_res"))
-                    .ppsMin(getCellValueAsDoubleByHeader(row, "pps_min"))
-                    .ppsMinReq(getCellValueAsDoubleByHeader(row, "pps_min_req"))
-                    .ppsMinRes(getCellValueAsDoubleByHeader(row, "pps_min_res"))
-                    .mbpsMax(getCellValueAsDoubleByHeader(row, "mbps_max"))
-                    .mbpsMaxReq(getCellValueAsDoubleByHeader(row, "mbps_max_req"))
-                    .mbpsMaxRes(getCellValueAsDoubleByHeader(row, "mbps_max_res"))
-                    .ppsMax(getCellValueAsDoubleByHeader(row, "pps_max"))
-                    .ppsMaxReq(getCellValueAsDoubleByHeader(row, "pps_max_req"))
-                    .ppsMaxRes(getCellValueAsDoubleByHeader(row, "pps_max_res"))
+                    .mbps(row.getDouble("mbps"))
+                    .mbpsReq(row.getDouble("mbps_req"))
+                    .mbpsRes(row.getDouble("mbps_res"))
+                    .pps(row.getDouble("pps"))
+                    .ppsReq(row.getDouble("pps_req"))
+                    .ppsRes(row.getDouble("pps_res"))
+                    .mbpsMin(row.getDouble("mbps_min"))
+                    .mbpsMinReq(row.getDouble("mbps_min_req"))
+                    .mbpsMinRes(row.getDouble("mbps_min_res"))
+                    .ppsMin(row.getDouble("pps_min"))
+                    .ppsMinReq(row.getDouble("pps_min_req"))
+                    .ppsMinRes(row.getDouble("pps_min_res"))
+                    .mbpsMax(row.getDouble("mbps_max"))
+                    .mbpsMaxReq(row.getDouble("mbps_max_req"))
+                    .mbpsMaxRes(row.getDouble("mbps_max_res"))
+                    .ppsMax(row.getDouble("pps_max"))
+                    .ppsMaxReq(row.getDouble("pps_max_req"))
+                    .ppsMaxRes(row.getDouble("pps_max_res"))
 
                     // ===== Error Percentage =====
-                    .tcpErrorPercentage(getCellValueAsDoubleByHeader(row, "tcp_error_percentage"))
-                    .tcpErrorPercentageReq(getCellValueAsDoubleByHeader(row, "tcp_error_percentage_req"))
-                    .tcpErrorPercentageRes(getCellValueAsDoubleByHeader(row, "tcp_error_percentage_res"))
-                    .pageErrorPercentage(getCellValueAsDoubleByHeader(row, "page_error_percentage"))
+                    .tcpErrorPercentage(row.getDouble("tcp_error_percentage"))
+                    .tcpErrorPercentageReq(row.getDouble("tcp_error_percentage_req"))
+                    .tcpErrorPercentageRes(row.getDouble("tcp_error_percentage_res"))
+                    .pageErrorPercentage(row.getDouble("page_error_percentage"))
 
                     // ===== 위치 정보 =====
-                    .countryNameReq(getCellValueByHeader(row, "country_name_req"))
-                    .countryNameRes(getCellValueByHeader(row, "country_name_res"))
-                    .continentNameReq(getCellValueByHeader(row, "continent_name_req"))
-                    .continentNameRes(getCellValueByHeader(row, "continent_name_res"))
-                    .domesticPrimaryNameReq(getCellValueByHeader(row, "domestic_primary_name_req"))
-                    .domesticPrimaryNameRes(getCellValueByHeader(row, "domestic_primary_name_res"))
-                    .domesticSub1NameReq(getCellValueByHeader(row, "domestic_sub1_name_req"))
-                    .domesticSub1NameRes(getCellValueByHeader(row, "domestic_sub1_name_res"))
-                    .domesticSub2NameReq(getCellValueByHeader(row, "domestic_sub2_name_req"))
-                    .domesticSub2NameRes(getCellValueByHeader(row, "domestic_sub2_name_res"))
+                    .countryNameReq(row.getString("country_name_req"))
+                    .countryNameRes(row.getString("country_name_res"))
+                    .continentNameReq(row.getString("continent_name_req"))
+                    .continentNameRes(row.getString("continent_name_res"))
+                    .domesticPrimaryNameReq(row.getString("domestic_primary_name_req"))
+                    .domesticPrimaryNameRes(row.getString("domestic_primary_name_res"))
+                    .domesticSub1NameReq(row.getString("domestic_sub1_name_req"))
+                    .domesticSub1NameRes(row.getString("domestic_sub1_name_res"))
+                    .domesticSub2NameReq(row.getString("domestic_sub2_name_req"))
+                    .domesticSub2NameRes(row.getString("domestic_sub2_name_res"))
 
                     // ===== 프로토콜 / 센서 =====
-                    .ndpiProtocolApp(getCellValueByHeader(row, "ndpi_protocol_app"))
-                    .ndpiProtocolMaster(getCellValueByHeader(row, "ndpi_protocol_master"))
-                    .sensorDeviceName(getCellValueByHeader(row, "sensor_device_name"))
+                    .ndpiProtocolApp(row.getString("ndpi_protocol_app"))
+                    .ndpiProtocolMaster(row.getString("ndpi_protocol_master"))
+                    .sensorDeviceName(row.getString("sensor_device_name"))
 
                     // ===== HTTP 세부 필드 =====
-                    .httpMethod(getCellValueByHeader(row, "http_method"))
-                    .httpVersion(getCellValueByHeader(row, "http_version"))
-                    .httpVersionReq(getCellValueByHeader(row, "http_version_req"))
-                    .httpVersionRes(getCellValueByHeader(row, "http_version_res"))
-                    .httpResPhrase(getCellValueByHeader(row, "http_res_phrase"))
-                    .httpContentType(getCellValueByHeader(row, "http_content_type"))
-                    .httpUserAgent(getCellValueByHeader(row, "http_user_agent"))
-                    .httpCookie(getCellValueByHeader(row, "http_cookie"))
-                    .httpLocation(getCellValueByHeader(row, "http_location"))
-                    .httpHost(getCellValueByHeader(row, "http_host"))
-                    .httpUri(getCellValueByHeader(row, "http_uri"))
-                    .httpUriSplit(getCellValueByHeader(row, "http_uri_split"))
-                    .httpReferer(getCellValueByHeader(row, "http_referer"))
+                    .httpMethod(row.getString("http_method"))
+                    .httpVersion(row.getString("http_version"))
+                    .httpVersionReq(row.getString("http_version_req"))
+                    .httpVersionRes(row.getString("http_version_res"))
+                    .httpResPhrase(row.getString("http_res_phrase"))
+                    .httpContentType(row.getString("http_content_type"))
+                    .httpUserAgent(row.getString("http_user_agent"))
+                    .httpCookie(row.getString("http_cookie"))
+                    .httpLocation(row.getString("http_location"))
+                    .httpHost(row.getString("http_host"))
+                    .httpUri(row.getString("http_uri"))
+                    .httpUriSplit(row.getString("http_uri_split"))
+                    .httpReferer(row.getString("http_referer"))
 
                     // ===== User Agent 파싱 =====
-                    .userAgentSoftwareName(getCellValueByHeader(row, "user_agent_software_name"))
-                    .userAgentOperatingSystemName(getCellValueByHeader(row, "user_agent_operating_system_name"))
-                    .userAgentOperatingPlatform(getCellValueByHeader(row, "user_agent_operating_platform"))
-                    .userAgentSoftwareType(getCellValueByHeader(row, "user_agent_software_type"))
-                    .userAgentHardwareType(getCellValueByHeader(row, "user_agent_hardware_type"))
-                    .userAgentLayoutEngineName(getCellValueByHeader(row, "user_agent_layout_engine_name"))
+                    .userAgentSoftwareName(row.getString("user_agent_software_name"))
+                    .userAgentOperatingSystemName(row.getString("user_agent_operating_system_name"))
+                    .userAgentOperatingPlatform(row.getString("user_agent_operating_platform"))
+                    .userAgentSoftwareType(row.getString("user_agent_software_type"))
+                    .userAgentHardwareType(row.getString("user_agent_hardware_type"))
+                    .userAgentLayoutEngineName(row.getString("user_agent_layout_engine_name"))
 
-                    // ts_server / created_at 은 코드에서 now()로 세팅한다고 치고 여기서는 생략
+                    // ts_server / created_at 은 코드에서 now()로 세팅
                     .createdAt(LocalDateTime.now())
                     .build();
 
@@ -529,5 +587,100 @@ public class ExcelDataReader {
             log.warn("Double 변환 실패: {}", e.getMessage());
         }
         return 0.0;
+    }
+    // ============== 공통 Row 접근 인터페이스 ==============
+    private interface RowAccessor {
+        String getString(String headerName);
+        Integer getInteger(String headerName);
+        Long getLong(String headerName);
+        Double getDouble(String headerName);
+    }
+
+    private class ExcelRowAccessor implements RowAccessor {
+        private final Row row;
+
+        private ExcelRowAccessor(Row row) {
+            this.row = row;
+        }
+
+        @Override
+        public String getString(String headerName) {
+            return getCellValueByHeader(row, headerName);
+        }
+
+        @Override
+        public Integer getInteger(String headerName) {
+            return getCellValueAsIntegerByHeader(row, headerName);
+        }
+
+        @Override
+        public Long getLong(String headerName) {
+            return getCellValueAsLongByHeader(row, headerName);
+        }
+
+        @Override
+        public Double getDouble(String headerName) {
+            return getCellValueAsDoubleByHeader(row, headerName);
+        }
+    }
+
+    private class CsvRowAccessor implements RowAccessor {
+        private final String[] cols;
+        private final Map<String, Integer> headerIndexMap;
+
+        private CsvRowAccessor(String[] cols, Map<String, Integer> headerIndexMap) {
+            this.cols = cols;
+            this.headerIndexMap = headerIndexMap;
+        }
+
+        private String getRaw(String headerName) {
+            Integer idx = headerIndexMap.get(headerName);
+            if (idx == null || idx < 0 || idx >= cols.length) {
+                return "";
+            }
+            String value = cols[idx];
+            return value == null ? "" : value.trim();
+        }
+
+        @Override
+        public String getString(String headerName) {
+            return getRaw(headerName);
+        }
+
+        @Override
+        public Integer getInteger(String headerName) {
+            String v = getRaw(headerName);
+            if (v.isEmpty()) return 0;
+            try {
+                return (int) Double.parseDouble(v);
+            } catch (NumberFormatException e) {
+                log.warn("CSV Integer 변환 실패 (header={}, value={})", headerName, v);
+                return 0;
+            }
+        }
+
+        @Override
+        public Long getLong(String headerName) {
+            String v = getRaw(headerName);
+            if (v.isEmpty()) return 0L;
+            try {
+                return (long) Double.parseDouble(v);
+            } catch (NumberFormatException e) {
+                log.warn("CSV Long 변환 실패 (header={}, value={})", headerName, v);
+                return 0L;
+            }
+        }
+
+        @Override
+        public Double getDouble(String headerName) {
+            String v = getRaw(headerName);
+            if (v.isEmpty()) return 0.0;
+            try {
+                return Double.parseDouble(v);
+            } catch (NumberFormatException e) {
+                log.warn("CSV Double 변환 실패 (header={}, value={})", headerName, v);
+                return 0.0;
+            }
+        }
     }
 }

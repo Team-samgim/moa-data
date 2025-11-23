@@ -9,7 +9,7 @@ moa:
   backend:
     url: http://localhost:8080/internal
   data:
-    excel-file: classpath:sample-data.xlsx
+    excel-file: classpath:sample-data.csv
     batch-size: 10
     send-interval: 5000  # 5초마다
     loop-mode: true      # 무한 반복

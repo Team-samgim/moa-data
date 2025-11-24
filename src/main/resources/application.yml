@@ -9,7 +9,13 @@ moa:
   backend:
     url: http://localhost:8080/internal
   data:
-    excel-file: classpath:sample-data.csv
+    s3-bucket: ${MOA_DATA_S3_BUCKET}
+    s3-key: ${MOA_DATA_S3_KEY}
     batch-size: 10
-    send-interval: 5000  # 5초마다
-    loop-mode: true      # 무한 반복
+    send-interval: 5000
+    loop-mode: true
+
+aws:
+  region: ${AWS_REGION}
+  access-key: ${AWS_ACCESS_KEY_ID}
+  secret-key: ${AWS_SECRET_ACCESS_KEY}

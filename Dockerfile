@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jdk-alpine
+FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
 COPY build/libs/*.jar app.jar
 EXPOSE 9090

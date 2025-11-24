@@ -46,6 +46,12 @@ dependencies {
     // swagger
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
 
+    // build.gradle
+    implementation 'software.amazon.awssdk:s3:2.21.0'
+
+    //spring-dotenv 라이브러리
+    implementation 'me.paulschwarz:spring-dotenv:4.0.0'
+
     // ✨ JSON 처리 (Spring Boot에 이미 포함되어 있지만 명시적으로 추가)
     // implementation 'com.fasterxml.jackson.core:jackson-databind'
     // implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'

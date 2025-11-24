@@ -2,8 +2,8 @@ package com.moa.moadata.scheduler;
 
 import com.moa.moadata.client.MoaApiClient;
 import com.moa.moadata.model.HttpPageSample;
-import com.moa.moadata.reader.ExcelDataReader;
-import com.moa.moadata.sse.service.SseEmitterService;  // ⭐ 추가
+import com.moa.moadata.reader.S3DataReader;
+import com.moa.moadata.sse.service.SseEmitterService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,9 +18,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiredArgsConstructor
 public class DataSenderScheduler {
 
-    private final ExcelDataReader excelDataReader;
+    private final S3DataReader s3DataReader;
     private final MoaApiClient moaApiClient;
-    private final SseEmitterService sseEmitterService;  // ⭐ 추가!
+    private final SseEmitterService sseEmitterService;
 
     @Value("${moa.data.batch-size}")
     private int batchSize;
@@ -35,12 +35,12 @@ public class DataSenderScheduler {
             return;
         }
 
-        if (!excelDataReader.hasNext()) {
+        if (!s3DataReader.hasNext()) {
             log.info("⏸️  전송할 데이터가 없습니다");
             return;
         }
 
-        List<HttpPageSample> batch = excelDataReader.readNextBatch(batchSize);
+        List<HttpPageSample> batch = s3DataReader.readNextBatch(batchSize);
 
         if (batch.isEmpty()) {
             log.warn("배치가 비어있습니다");
@@ -53,8 +53,8 @@ public class DataSenderScheduler {
         // 2️⃣ SSE로 프론트엔드에 실시간 전송 ⭐ 추가!
         sseEmitterService.sendBatchData(batch);
 
-        int current = excelDataReader.getCurrentIndex();
-        int total = excelDataReader.getTotalSize();
+        int current = s3DataReader.getCurrentIndex();
+        int total = s3DataReader.getTotalSize();
         double progress = (double) current / total * 100;
 
         log.info("📊 진행 상황: {}/{} ({:.1f}%) | SSE 클라이언트: {}개",

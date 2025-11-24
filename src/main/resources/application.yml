@@ -7,7 +7,7 @@ server:
 
 moa:
   backend:
-    url: http://localhost:8080/internal
+    url: ${MOA_BACKEND_URL:http://localhost:8080/internal} #EC2에서는 MOA_BACKEND_URL 사용
   data:
     s3-bucket: ${MOA_DATA_S3_BUCKET}
     s3-key: ${MOA_DATA_S3_KEY}

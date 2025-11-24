@@ -1,7 +1,7 @@
 version: "3.8"
 services:
   data:
-    image: ghcr.io/team-samgim/moa-data:latest
+    image: moa-data:latest
     container_name: moa-data
     restart: always
     ports:

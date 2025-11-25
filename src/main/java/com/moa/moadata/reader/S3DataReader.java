@@ -75,7 +75,7 @@ public class S3DataReader {
 
         try (InputStream inputStream = s3Client.getObject(request);
              BufferedReader reader = new BufferedReader(
-                     new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+                     new InputStreamReader(inputStream, "EUC-KR"))) {
 
             String headerLine = reader.readLine();
             if (headerLine == null) {

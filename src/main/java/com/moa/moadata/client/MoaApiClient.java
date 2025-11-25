@@ -30,10 +30,17 @@ public class MoaApiClient {
      * 배치로 데이터 전송
      */
     public void sendBatch(List<HttpPageSample> samples) {
+
         if (samples == null || samples.isEmpty()) {
             log.warn("전송할 데이터가 없습니다");
             return;
         }
+
+            // ✅ 전송 전 한글 확인
+            log.info("=== 전송 전 데이터 확인 ===");
+            log.info("country_name_req: {}", samples.get(0).getCountryNameReq());
+            log.info("domestic_sub1_name_req: {}", samples.get(0).getDomesticSub1NameReq());
+
 
         try {
             String url = moaBackendUrl + "/page-samples/batch";
